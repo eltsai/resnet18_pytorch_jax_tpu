@@ -4,3 +4,10 @@ data/
 checkpoints_*/
 logs/
 *.ckpt
+
+# ignore __pycache__ directories
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+*.log
+*.out
