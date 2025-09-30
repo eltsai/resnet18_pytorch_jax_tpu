@@ -1,6 +1,6 @@
 # ResNet-18: JAX vs PyTorch TPU Training Comparison
 
-This repository implements ResNet-18 for [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html) classification in both **JAX/Flax** and **PyTorch** optimized for **TPU v6 lite** training, providing a comprehensive framework comparison with performance analysis.
+This repository implements ResNet-18 for [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html) classification in both **JAX/Flax** and **PyTorch** optimized for **TPU v6 lite** training. 
 
 ## **What & Why**
 
@@ -8,7 +8,7 @@ Hands-on exploration comparing JAX's functional programming approach ([jit](http
 
 ## **Training Results**
 
-Both implementations achieve strong convergence on CIFAR-10 with optimized TPU training:
+Both implementations achieve convergence on CIFAR-10 with optimized TPU training:
 
 ### JAX/Flax Results
 ![JAX Training History](logs/jax_tpu/training_history.png)
