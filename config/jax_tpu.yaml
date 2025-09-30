@@ -1,0 +1,63 @@
+# ======================================================
+# JAX/Flax TPU Training Configuration  
+# ======================================================
+
+# Training hyperparameters
+training:
+  per_device_batch_size: 128  # Per-device batch size. Total = 128 * 8 = 1024 (matches PyTorch's bs)
+  total_epochs: 200
+  epochs_per_testing: 5
+  base_lr: 0.1  # Match PyTorch learning rate
+  weight_decay: 0.0005  # 5e-4
+  warmup_epochs: 5
+  momentum: 0.9
+  nesterov: true
+  scheduler_eta_min: 0.0001  # 1e-4
+
+# Model configuration
+model:
+  name: "resnet18"
+  num_classes: 10
+
+# Data configuration
+data:
+  dataset: "CIFAR10"
+  data_path: "./data" 
+  num_workers: 4  # Number of async workers for data loading
+  prefetch_buffer: 3  # Number of batches to prefetch
+  test_batch_multiplier: 2  # Test batch size = per_device_batch_size * test_batch_multiplier
+
+# TPU configuration
+tpu:
+  total_devices: 8
+  device_type: "TPU"
+
+# Paths and directories
+paths:
+  checkpoint_dir: "./checkpoints_jax"
+  log_dir: "./logs/jax_tpu/"
+  best_model_name: "best_model"
+  last_model_name: "last_model"
+
+# Data augmentation and normalization (CIFAR-10)
+transforms:
+  train:
+    random_crop:
+      size: 32
+      padding: 4
+      padding_mode: "reflect"
+    random_horizontal_flip: true
+    normalize:
+      mean: [0.4914, 0.4822, 0.4465]
+      std: [0.2023, 0.1994, 0.2010]
+  test:
+    normalize:
+      mean: [0.4914, 0.4822, 0.4465]
+      std: [0.2023, 0.1994, 0.2010]
+
+# Logging configuration
+logging:
+  seed: 42
+  save_stats: true
+  create_plots: true
+  plot_format: "png"

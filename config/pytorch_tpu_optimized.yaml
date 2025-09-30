@@ -1,0 +1,66 @@
+# ======================================================
+# Optimized PyTorch TPU Training Configuration
+# ======================================================
+
+# Training hyperparameters
+training:
+  batch_size: 128  # Per-core batch size. Total batch size = 128 * 8 = 1024
+  total_epochs: 200
+  epochs_per_testing: 5
+  base_lr: 0.1
+  weight_decay: 0.0005  # 5e-4
+  warmup_epochs: 5
+  momentum: 0.9
+  nesterov: true
+  scheduler_eta_min: 0.0001  # 1e-4
+  
+  # NEW OPTIMIZATIONS
+  mixed_precision: true      # Enable mixed precision training
+  compile_model: true        # Enable model compilation (PyTorch 2.0+)
+  gradient_accumulation: 1   # Number of steps to accumulate gradients
+
+# Model configuration
+model:
+  name: "resnet18"
+  num_classes: 10
+
+# Data configuration
+data:
+  dataset: "CIFAR10"
+  root: "./data"
+  num_workers: 8  # Increased for better data loading
+  test_batch_multiplier: 2  # Test batch size = batch_size * test_batch_multiplier
+  prefetch_factor: 4  # NEW: Number of batches to prefetch per worker
+
+# TPU configuration
+tpu:
+  total_cores: 8
+  device_type: "TPU"
+
+# Paths and directories
+paths:
+  checkpoint_dir: "./checkpoints_tpu"
+  log_dir: "./logs/pytorch_tpu/"
+  best_model_name: "best_model.pth"
+  last_model_name: "last_model.pth"
+
+# Data augmentation and normalization (CIFAR-10)
+transforms:
+  train:
+    random_crop:
+      size: 32
+      padding: 4
+      padding_mode: "reflect"
+    random_horizontal_flip: true
+    normalize:
+      mean: [0.4914, 0.4822, 0.4465]
+      std: [0.2023, 0.1994, 0.2010]
+  test:
+    normalize:
+      mean: [0.4914, 0.4822, 0.4465]
+      std: [0.2023, 0.1994, 0.2010]
+
+# Logging configuration
+logging:
+  seed: 42
+  plot_format: "png"

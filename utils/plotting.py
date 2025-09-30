@@ -33,13 +33,14 @@ def create_training_plots(train_loss_history, train_acc_history,
     plt.plot(np.arange(len(train_loss_history)), train_loss_history, 
              label='Train Loss', linewidth=2)
 
-    # Plot test loss at testing intervals
-    epochs = np.arange(len(test_loss_history))
-    test_epochs = epochs * epochs_per_testing
-    plt.plot(test_epochs, test_loss_history, 'o--', 
+    # Plot test loss at actual evaluation epochs
+    # Find epochs where test evaluation occurred (non-NaN values)
+    test_epochs = [i for i, loss in enumerate(test_loss_history) if not np.isnan(loss)]
+    valid_test_loss = [test_loss_history[i] for i in test_epochs]
+    
+    plt.plot(test_epochs, valid_test_loss, 
              label='Test Loss', 
-             markevery=np.isfinite(test_loss_history), 
-             markersize=5, linewidth=2)
+             linewidth=2)
 
     plt.title('Loss History Over Epochs')
     plt.xlabel('Epoch')
@@ -54,12 +55,14 @@ def create_training_plots(train_loss_history, train_acc_history,
              [acc * 100 for acc in train_acc_history], 
              label='Train Accuracy', linewidth=2)
 
-    # Plot test accuracy at testing intervals
-    plt.plot(test_epochs, 
-             [acc * 100 if not np.isnan(acc) else np.nan for acc in test_acc_history], 
-             'o--', label='Test Accuracy', 
-             markevery=np.isfinite(test_acc_history), 
-             markersize=5, linewidth=2)
+    # Plot test accuracy at actual evaluation epochs
+    # Find epochs where test evaluation occurred (non-NaN values)  
+    test_acc_epochs = [i for i, acc in enumerate(test_acc_history) if not np.isnan(acc)]
+    valid_test_acc = [test_acc_history[i] * 100 for i in test_acc_epochs]
+    
+    plt.plot(test_acc_epochs, valid_test_acc, 
+             label='Test Accuracy', 
+             linewidth=2)
 
     plt.title('Accuracy History Over Epochs')
     plt.xlabel('Epoch')

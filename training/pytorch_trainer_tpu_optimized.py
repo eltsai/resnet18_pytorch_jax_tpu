@@ -1,5 +1,11 @@
 """
-PyTorch TPU Trainer for ResNet18 on CIFAR-10
+Optimized PyTorch TPU Trainer for ResNet18 on CIFAR-10
+Key optimizations:
+1. Mixed precision training
+2. Compiled models
+3. Optimized data loading
+4. Better memory management
+5. Asynchronous operations
 """
 import torch
 import torch.nn as nn
@@ -10,6 +16,11 @@ import time
 import numpy as np
 from datetime import datetime
 from typing import Dict, Any, Tuple, List
+
+# XLA imports
+import torch_xla.core.xla_model as xm
+import torch_xla.amp as xla_amp
+import torch_xla.debug.metrics as met
 
 from models.pytorch.resnet18 import resnet18
 from utils.tpu_utils import (
@@ -23,16 +34,30 @@ from utils.logging_utils import (
 from utils.plotting import create_training_plots
 
 
-class TPUTrainer:
+class OptimizedTPUTrainer:
     def __init__(self, config: Dict[str, Any]):
         """
-        Initialize TPU Trainer
+        Initialize Optimized TPU Trainer
         
         Args:
             config: Training configuration dictionary
         """
         self.config = config
         self.device, self.is_master = setup_tpu_device()
+        
+        # Mixed precision support with compatibility check
+        self.use_amp = config.get('training', {}).get('mixed_precision', True)
+        if self.use_amp:
+            try:
+                self.scaler = xla_amp.GradScaler()
+                # Test autocast compatibility
+                with xla_amp.autocast(self.device):
+                    pass
+                print("✓ Mixed precision (AMP) enabled")
+            except Exception as e:
+                print(f"Warning: Mixed precision not available: {e}")
+                print("Falling back to FP32 training")
+                self.use_amp = False
         
         # Training history
         self.train_loss_history = []
@@ -45,15 +70,21 @@ class TPUTrainer:
         self.best_epoch = -1
         self.current_epoch = 0
         
+        # Performance tracking
+        self.step_count = 0
+        self.compile_metrics = []
+        
         # Get paths
         self.best_ckpt_path, self.last_ckpt_path = get_checkpoint_paths(config)
         
     def setup_data_transforms(self) -> Tuple[transforms.Compose, transforms.Compose]:
-        """Create data transforms based on config"""
+        """Create optimized data transforms"""
         transform_cfg = self.config['transforms']
         
-        # Training transforms
+        # Training transforms with optimizations
         train_transforms = []
+        
+        # Use more efficient transforms
         if 'random_crop' in transform_cfg['train']:
             crop_cfg = transform_cfg['train']['random_crop']
             train_transforms.append(
@@ -67,29 +98,35 @@ class TPUTrainer:
         if transform_cfg['train'].get('random_horizontal_flip'):
             train_transforms.append(transforms.RandomHorizontalFlip())
         
+        # Convert to tensor first
         train_transforms.append(transforms.ToTensor())
         
-        # Add normalization
+        # Normalize (this should be done on TPU for efficiency)
         norm_cfg = transform_cfg['train']['normalize']
         train_transforms.append(
             transforms.Normalize(norm_cfg['mean'], norm_cfg['std'])
         )
         
         # Test transforms
-        test_transforms = [transforms.ToTensor()]
-        norm_cfg = transform_cfg['test']['normalize']
-        test_transforms.append(
-            transforms.Normalize(norm_cfg['mean'], norm_cfg['std'])
-        )
+        test_transforms = [
+            transforms.ToTensor(),
+            transforms.Normalize(
+                transform_cfg['test']['normalize']['mean'],
+                transform_cfg['test']['normalize']['std']
+            )
+        ]
         
         return transforms.Compose(train_transforms), transforms.Compose(test_transforms)
     
     def setup_data_loaders(self) -> Tuple[torch.utils.data.DataLoader, torch.utils.data.DataLoader]:
-        """Setup data loaders"""
+        """Setup optimized data loaders"""
         transform_train, transform_test = self.setup_data_transforms()
         
         data_cfg = self.config['data']
         training_cfg = self.config['training']
+        
+        # Use optimized data loading parameters
+        num_workers = min(data_cfg['num_workers'], 8)  # Too many workers can hurt TPU performance
         
         # Datasets
         trainset = torchvision.datasets.CIFAR10(
@@ -105,13 +142,15 @@ class TPUTrainer:
             transform=transform_test
         )
         
-        # Data loaders
+        # Optimized data loaders
         trainloader = torch.utils.data.DataLoader(
             trainset,
             batch_size=training_cfg['batch_size'],
             shuffle=True,
-            num_workers=data_cfg['num_workers'],
-            drop_last=True
+            num_workers=num_workers,
+            drop_last=True,
+            pin_memory=False,  # Not needed for TPU
+            persistent_workers=True if num_workers > 0 else False
         )
         
         test_batch_size = training_cfg['batch_size'] * data_cfg['test_batch_multiplier']
@@ -119,24 +158,34 @@ class TPUTrainer:
             testset,
             batch_size=test_batch_size,
             shuffle=False,
-            num_workers=data_cfg['num_workers'],
-            drop_last=True
+            num_workers=num_workers,
+            drop_last=True,
+            pin_memory=False,
+            persistent_workers=True if num_workers > 0 else False
         )
         
         return trainloader, testloader
     
     def setup_model_and_optimizer(self) -> Tuple[nn.Module, nn.Module, optim.Optimizer, optim.lr_scheduler._LRScheduler]:
-        """Setup model, criterion, optimizer and scheduler"""
+        """Setup optimized model, criterion, optimizer and scheduler"""
         model_cfg = self.config['model']
         training_cfg = self.config['training']
         
         # Model
         model = resnet18(num_classes=model_cfg['num_classes']).to(self.device)
         
+        # Compile model for better performance (PyTorch 2.0+)
+        if hasattr(torch, 'compile') and training_cfg.get('compile_model', True):
+            try:
+                model = torch.compile(model, backend='openxla')
+                print("✓ Model compiled with OpenXLA backend")
+            except Exception as e:
+                print(f"Warning: Could not compile model: {e}")
+        
         # Criterion
         criterion = nn.CrossEntropyLoss()
         
-        # Optimizer
+        # Optimizer with optimized settings
         optimizer = optim.SGD(
             model.parameters(),
             lr=training_cfg['base_lr'],
@@ -158,7 +207,7 @@ class TPUTrainer:
     
     def train_epoch(self, model: nn.Module, criterion: nn.Module, 
                    optimizer: optim.Optimizer, trainloader: torch.utils.data.DataLoader) -> Tuple[float, float]:
-        """Train for one epoch"""
+        """Optimized training for one epoch"""
         model.train()
         total_train_loss = 0.0
         train_correct_predictions = 0
@@ -166,22 +215,47 @@ class TPUTrainer:
         
         train_device_loader = create_parallel_loader(trainloader, self.device)
         
-        for inputs, targets in train_device_loader:
+        for batch_idx, (inputs, targets) in enumerate(train_device_loader):
             optimizer.zero_grad(set_to_none=True)
             
-            logits = model(inputs)
-            loss = criterion(logits, targets)
-            loss.backward()
-            
-            optimizer_step(optimizer)
+            if self.use_amp:
+                # Mixed precision training with error handling
+                try:
+                    with xla_amp.autocast(self.device):
+                        logits = model(inputs)
+                        loss = criterion(logits, targets)
+                except TypeError:
+                    # Fallback for older XLA versions
+                    with xla_amp.autocast():
+                        logits = model(inputs)
+                        loss = criterion(logits, targets)
+                
+                # Scaled backward pass
+                self.scaler.scale(loss).backward()
+                self.scaler.step(optimizer)
+                self.scaler.update()
+            else:
+                # Regular training
+                logits = model(inputs)
+                loss = criterion(logits, targets)
+                loss.backward()
+                optimizer_step(optimizer)
             
             # Collect metrics locally
-            total_train_loss += loss.item() * inputs.size(0)
-            _, predicted = logits.max(1)
-            train_correct_predictions += predicted.eq(targets).sum().item()
-            train_total_samples += targets.size(0)
+            with torch.no_grad():
+                total_train_loss += loss.item() * inputs.size(0)
+                _, predicted = logits.max(1)
+                train_correct_predictions += predicted.eq(targets).sum().item()
+                train_total_samples += targets.size(0)
             
-            sync_step()
+            self.step_count += 1
+            
+            # Periodic sync for better performance
+            if batch_idx % 10 == 0:
+                sync_step()
+        
+        # Final sync
+        sync_step()
         
         # Aggregate metrics across cores
         metrics = aggregate_metrics({
@@ -195,9 +269,10 @@ class TPUTrainer:
         
         return avg_train_loss, train_acc
     
+    @torch.no_grad()
     def evaluate(self, model: nn.Module, criterion: nn.Module, 
                 testloader: torch.utils.data.DataLoader) -> Tuple[float, float]:
-        """Evaluate the model"""
+        """Optimized evaluation"""
         model.eval()
         total_test_loss = 0.0
         total_samples = 0
@@ -205,15 +280,32 @@ class TPUTrainer:
         
         test_device_loader = create_parallel_loader(testloader, self.device)
         
-        with torch.no_grad():
-            for inputs, targets in test_device_loader:
+        for batch_idx, (inputs, targets) in enumerate(test_device_loader):
+            if self.use_amp:
+                try:
+                    with xla_amp.autocast(self.device):
+                        logits = model(inputs)
+                        loss = criterion(logits, targets)
+                except TypeError:
+                    # Fallback for older XLA versions
+                    with xla_amp.autocast():
+                        logits = model(inputs)
+                        loss = criterion(logits, targets)
+            else:
                 logits = model(inputs)
                 loss = criterion(logits, targets)
-                
-                total_test_loss += loss.item() * inputs.size(0)
-                _, predicted = logits.max(1)
-                total_samples += targets.size(0)
-                correct_predictions += predicted.eq(targets).sum().item()
+            
+            total_test_loss += loss.item() * inputs.size(0)
+            _, predicted = logits.max(1)
+            total_samples += targets.size(0)
+            correct_predictions += predicted.eq(targets).sum().item()
+            
+            # Periodic sync
+            if batch_idx % 10 == 0:
+                sync_step()
+        
+        # Final sync
+        sync_step()
         
         # Aggregate metrics across cores
         metrics = aggregate_metrics({
@@ -230,16 +322,23 @@ class TPUTrainer:
     def save_checkpoint(self, model: nn.Module, optimizer: optim.Optimizer, 
                        scheduler: optim.lr_scheduler._LRScheduler, epoch: int, 
                        is_best: bool = False):
-        """Save model checkpoint"""
+        """Optimized checkpoint saving"""
         if not self.is_master:
             return
         
+        # Get model state without compilation wrapper
+        if hasattr(model, '_orig_mod'):
+            model_state = model._orig_mod.state_dict()
+        else:
+            model_state = model.state_dict()
+        
         state = {
-            'model_state_dict': model.state_dict(),
+            'model_state_dict': model_state,
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
             'epoch': epoch,
-            'best_acc': self.best_acc
+            'best_acc': self.best_acc,
+            'step_count': self.step_count
         }
         
         if is_best:
@@ -247,8 +346,20 @@ class TPUTrainer:
         else:
             save_checkpoint(state, self.last_ckpt_path)
     
+    def print_performance_metrics(self):
+        """Print XLA performance metrics"""
+        if self.is_master:
+            print("\n" + "="*60)
+            print("XLA Performance Metrics:")
+            print("="*60)
+            try:
+                print(met.metrics_report())
+            except Exception as e:
+                print(f"Could not get metrics: {e}")
+            print("="*60)
+    
     def train(self):
-        """Main training loop"""
+        """Optimized main training loop"""
         # Setup
         print_tpu_info(self.device, self.is_master)
         log_training_info(self.config, self.is_master)
@@ -263,7 +374,7 @@ class TPUTrainer:
         for epoch in range(training_cfg['total_epochs']):
             epoch_start_time = time.time()
             
-            # Warmup logic
+            # Warmup logic (optimized)
             if epoch < training_cfg['warmup_epochs']:
                 lr_scale = (epoch + 1) / training_cfg['warmup_epochs']
                 current_lr = training_cfg['base_lr'] * lr_scale
@@ -321,6 +432,10 @@ class TPUTrainer:
                 log_metrics(epoch, avg_train_loss, train_acc, 
                            epoch_time=epoch_time, is_master=self.is_master)
             
+            # Print performance metrics periodically
+            if epoch % 20 == 0 and self.is_master:
+                self.print_performance_metrics()
+            
             self.current_epoch = epoch
         
         # Final logging and saving
@@ -331,6 +446,9 @@ class TPUTrainer:
             # Log final results
             total_time = (datetime.now() - start_time).total_seconds()
             log_final_results(self.best_acc, self.best_epoch, total_time, self.is_master)
+            
+            # Final performance metrics
+            self.print_performance_metrics()
             
             # Save training statistics to JSON
             from utils.logging_utils import save_training_stats
@@ -351,6 +469,6 @@ class TPUTrainer:
 
 
 def run_training(config: Dict[str, Any]):
-    """Run training with given configuration"""
-    trainer = TPUTrainer(config)
+    """Run optimized training with given configuration"""
+    trainer = OptimizedTPUTrainer(config)
     trainer.train()

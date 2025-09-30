@@ -3,8 +3,10 @@ Logging utilities for training
 """
 import os
 import yaml
+import json
+import numpy as np
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -59,23 +61,39 @@ def log_training_info(config: Dict[str, Any], is_master: bool = True):
         return
     
     print('=' * 60)
-    print('PYTORCH TPU TRAINING CONFIGURATION')
-    print('=' * 60)
     
-    # Training settings
-    training_cfg = config['training']
-    total_batch_size = training_cfg['batch_size'] * config['tpu']['total_cores']
+    # Detect framework based on config structure
+    if 'batch_size' in config['training']:
+        # PyTorch configuration
+        print('PYTORCH TPU TRAINING CONFIGURATION')
+        print('=' * 60)
+        training_cfg = config['training']
+        per_core_batch_size = training_cfg['batch_size']
+        total_cores = config['tpu']['total_cores']
+        total_batch_size = per_core_batch_size * total_cores
+        core_label = "Per-Core Batch Size"
+        cores_label = "TPU Cores"
+    else:
+        # JAX configuration  
+        print('JAX/FLAX TPU TRAINING CONFIGURATION')
+        print('=' * 60)
+        training_cfg = config['training']
+        per_core_batch_size = training_cfg['per_device_batch_size']
+        total_cores = config['tpu']['total_devices']
+        total_batch_size = per_core_batch_size * total_cores
+        core_label = "Per-Device Batch Size"
+        cores_label = "TPU Devices"
     
     print(f"Model: {config['model']['name']}")
     print(f"Dataset: {config['data']['dataset']}")
     print(f"Total epochs: {training_cfg['total_epochs']}")
-    print(f"Per-Core Batch Size: {training_cfg['batch_size']}")
+    print(f"{core_label}: {per_core_batch_size}")
     print(f"Total Effective Batch Size: {total_batch_size}")
     print(f"Base Learning Rate: {training_cfg['base_lr']}")
     print(f"Weight Decay: {training_cfg['weight_decay']}")
     print(f"Warmup Epochs: {training_cfg['warmup_epochs']}")
     print(f"Epochs per testing: {training_cfg['epochs_per_testing']}")
-    print(f"TPU Cores: {config['tpu']['total_cores']}")
+    print(f"{cores_label}: {total_cores}")
     print('=' * 60)
 
 
@@ -178,3 +196,54 @@ def save_config_copy(config: Dict[str, Any], log_dir: str):
     
     print(f"Configuration saved to: {config_copy_path}")
     return config_copy_path
+
+
+def save_training_stats(train_loss_history: List[float], train_acc_history: List[float], 
+                       test_loss_history: List[float], test_acc_history: List[float], 
+                       best_acc: float, best_epoch: int, total_time: float,
+                       config: Dict[str, Any]):
+    """
+    Save training statistics to JSON file
+    
+    Args:
+        train_loss_history: List of training losses
+        train_acc_history: List of training accuracies
+        test_loss_history: List of test losses (may contain NaN values)
+        test_acc_history: List of test accuracies (may contain NaN values)
+        best_acc: Best accuracy achieved
+        best_epoch: Epoch where best accuracy was achieved
+        total_time: Total training time in seconds
+        config: Configuration dictionary
+    """
+    stats = {
+        'training': {
+            'loss_history': [float(x) for x in train_loss_history],
+            'accuracy_history': [float(x) for x in train_acc_history]
+        },
+        'testing': {
+            'loss_history': [float(x) if not np.isnan(x) else None for x in test_loss_history],
+            'accuracy_history': [float(x) if not np.isnan(x) else None for x in test_acc_history]
+        },
+        'best_results': {
+            'best_accuracy': float(best_acc),
+            'best_epoch': int(best_epoch),
+            'total_training_time_seconds': float(total_time)
+        },
+        'config': {
+            'total_epochs': config['training']['total_epochs'],
+            'epochs_per_testing': config['training']['epochs_per_testing'],
+            'per_core_batch_size': config['training'].get('per_device_batch_size', config['training'].get('batch_size')),
+            'base_lr': config['training']['base_lr'],
+            'weight_decay': config['training']['weight_decay'],
+            'warmup_epochs': config['training']['warmup_epochs']
+        },
+        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    log_dir = config['paths']['log_dir']
+    stats_path = os.path.join(log_dir, 'training_stats.json')
+    with open(stats_path, 'w') as f:
+        json.dump(stats, f, indent=2)
+    
+    print(f"Training statistics saved to: {stats_path}")
+    return stats_path
